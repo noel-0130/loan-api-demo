@@ -36,3 +36,29 @@ npm test
 - [x] Auth (JWT login, 401 handling)
 - [x] Loans (apply, approve, Zod validation)
 - [ ] Payments (idempotency)
+
+## Run with Docker
+```bash
+docker compose up -d --build
+curl localhost:3000/health
+```
+Starts the API (port 3000) and MySQL 8 (port 3306), which creates two
+databases: `loans` and `loans_test`.
+
+Run the tests inside the container:
+```bash
+docker compose run --rm app npm test
+```
+
+## Idempotency (MySQL)
+- The payment and its key are saved in one transaction.
+- The primary key `(user_id, idem_key)` blocks duplicate charges, even for two simultaneous requests.
+- Keys are scoped per user.
+- Same key with a different body returns 422.
+
+## Run tests locally
+```bash
+docker compose up -d mysql
+npm test
+```
+Currently 20 tests passing (auth, loans, payments, idempotency).

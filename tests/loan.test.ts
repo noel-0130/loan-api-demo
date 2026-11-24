@@ -1,14 +1,14 @@
 import request from 'supertest';
 import { expect } from 'chai';
 import { app } from '../src/app';
-import { resetDb } from '../src/store';
+import { resetDb } from '../src/db';
 import { getToken } from './helpers';
 
 describe('Loans', () => {
   let token: string;
 
   beforeEach(async () => {
-    resetDb();
+    await resetDb();
     token = await getToken();
   });
 

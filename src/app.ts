@@ -1,7 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
-import { db } from './store';
+import { createLoan, getLoan, approveLoan } from './db';
 import { requireAuth, signToken } from './auth';
+import { paymentsRouter } from './payments';
 
 export const app = express();
 app.use(express.json());
@@ -16,11 +17,6 @@ const loanSchema = z.object({
   termMonths: z.number().int().min(1).max(36),
 });
 
-const paymentSchema = z.object({
-  loanId: z.number().int(),
-  amount: z.number().positive(),
-});
-
 app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
 });
@@ -29,70 +25,39 @@ app.get('/health', (_req, res) => {
 app.post('/login', (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.issues });
+    res.status(400).json({ error: parsed.error.issues });
+    return;
   }
   if (parsed.data.password !== 'password123') {
-    return res.status(401).json({ error: 'Invalid credentials' });
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
   }
-  return res.status(200).json({ token: signToken(parsed.data.username) });
+  res.status(200).json({ token: signToken(parsed.data.username) });
 });
 
 app.get('/me', requireAuth, (req, res) => {
   res.status(200).json({ userId: (req as any).userId });
 });
 
-app.post('/loans', requireAuth, (req, res) => {
+app.post('/loans', requireAuth, async (req, res) => {
   const parsed = loanSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.issues });
+    res.status(400).json({ error: parsed.error.issues });
+    return;
   }
-  const loan = {
-    id: db.nextLoanId++,
-    userId: (req as any).userId as string,
-    ...parsed.data,
-    status: 'pending' as const,
-  };
-  db.loans.push(loan);
-  return res.status(201).json(loan);
+  const userId = (req as any).userId as string;
+  const loan = await createLoan(userId, parsed.data.amount, parsed.data.termMonths);
+  res.status(201).json(loan);
 });
 
-app.post('/loans/:id/approve', requireAuth, (req, res) => {
-  const loan = db.loans.find((l) => l.id === Number(req.params.id));
-  if (!loan) return res.status(404).json({ error: 'Loan not found' });
-  loan.status = 'approved';
-  return res.status(200).json(loan);
+app.post('/loans/:id/approve', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const loan = await getLoan(id);
+  if (!loan) {
+    res.status(404).json({ error: 'Loan not found' });
+    return;
+  }
+  res.status(200).json(await approveLoan(id));
 });
 
-app.post('/payments', requireAuth, (req, res) => {
-  const key = req.header('Idempotency-Key');
-  if (!key) {
-    return res.status(400).json({ error: 'Idempotency-Key header required' });
-  }
-
-  const parsed = paymentSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.issues });
-  }
-
-  const fingerprint = JSON.stringify(parsed.data);
-  const existing = db.idempotency.get(key);
-  if (existing) {
-    if (existing.fingerprint !== fingerprint) {
-      return res
-        .status(422)
-        .json({ error: 'Idempotency-Key reused with a different request' });
-    }
-    return res.status(201).json(existing.payment);
-  }
-
-  const loan = db.loans.find((l) => l.id === parsed.data.loanId);
-  if (!loan) return res.status(404).json({ error: 'Loan not found' });
-  if (loan.status !== 'approved') {
-    return res.status(409).json({ error: 'Loan not approved' });
-  }
-
-  const payment = { id: db.nextPaymentId++, ...parsed.data };
-  db.payments.push(payment);
-  db.idempotency.set(key, { fingerprint, payment });
-  return res.status(201).json(payment);
-});
+app.use(paymentsRouter);
